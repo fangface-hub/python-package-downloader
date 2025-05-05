@@ -27,6 +27,14 @@ import re
 import urllib.parse  # URLエンコード用
 import shutil
 import logging
+import json
+
+try:
+    from cryptography.fernet import Fernet
+
+    CRYPTOGRAPHY_AVAILABLE = True
+except ImportError:
+    CRYPTOGRAPHY_AVAILABLE = False
 
 try:
     from pypi_simple import PyPISimple
@@ -546,6 +554,54 @@ def start_download_no_pip(config: DownloadConfig) -> None:
             download_package_no_pip(package_name, platform, abi, config)
 
 
+def generate_key() -> bytes:
+    """暗号化キーを生成し、ファイルに保存する."""
+    key_file = "key.key"
+    if not os.path.exists(key_file):
+        key = Fernet.generate_key()
+        with open(key_file, "wb") as f:
+            f.write(key)
+    else:
+        with open(key_file, "rb") as f:
+            key = f.read()
+    return key
+
+
+def encrypt_password(password: str, key: bytes) -> str:
+    """パスワードを暗号化する."""
+    fernet = Fernet(key)
+    return fernet.encrypt(password.encode()).decode()
+
+
+def decrypt_password(encrypted_password: str, key: bytes) -> str:
+    """暗号化されたパスワードを復号化する."""
+    fernet = Fernet(key)
+    return fernet.decrypt(encrypted_password.encode()).decode()
+
+
+def save_settings(settings: dict, key: bytes) -> None:
+    """設定をJSONファイルに保存する."""
+    if "proxy_password" in settings:
+        settings["proxy_password"] = encrypt_password(
+            settings["proxy_password"], key
+        )
+    with open("settings.json", "w", encoding="utf-8") as f:
+        json.dump(settings, f, ensure_ascii=False, indent=4)
+
+
+def load_settings(key: bytes) -> dict:
+    """JSONファイルから設定を読み込む."""
+    if not os.path.exists("settings.json"):
+        return {}
+    with open("settings.json", "r", encoding="utf-8") as f:
+        settings = json.load(f)
+    if "proxy_password" in settings:
+        settings["proxy_password"] = decrypt_password(
+            settings["proxy_password"], key
+        )
+    return settings
+
+
 class MainWindow(Tk):
     """pythonパッケージダウンローダーのメインウィンドウ.
 
@@ -560,6 +616,25 @@ class MainWindow(Tk):
         super().__init__()
         self.title("pythonパッケージダウンローダー")
         self.setup_ui()
+
+        key = generate_key() if CRYPTOGRAPHY_AVAILABLE else None
+        settings = load_settings(key)
+        if settings:
+            self.os_var.set(settings.get("os_name", "Windows"))
+            for version in settings.get("python_versions", []):
+                if version in self.python_versions:
+                    index = self.python_versions.index(version)
+                    self.python_version_listbox.select_set(index)
+            self.package_list_entry.set(settings.get("package_list_file", ""))
+            self.dest_folder_entry.set(settings.get("dest_folder", ""))
+            self.pip_path_entry.set(settings.get("pip_path", ""))
+            self.proxy_user_entry.set(settings.get("proxy_user", ""))
+            self.proxy_password_entry.set(settings.get("proxy_password", ""))
+            self.proxy_server_entry.set(settings.get("proxy_server", ""))
+            self.proxy_port_entry.set(settings.get("proxy_port", ""))
+            self.include_source_var.set(settings.get("include_source", False))
+            self.use_proxy_var.set(settings.get("use_proxy", False))
+            self.toggle_proxy_widgets()
 
     def setup_ui(self) -> None:
         """GUIの各要素を設定する."""
@@ -707,6 +782,12 @@ class MainWindow(Tk):
             self, text="ダウンロード開始", command=self.on_download
         )
         download_button.grid(row=12, column=0, columnspan=3, pady=10)
+
+        # 設定を保存ボタン
+        save_button = Button(
+            self, text="設定を保存", command=self.save_settings
+        )
+        save_button.grid(row=13, column=0, columnspan=3, pady=10)
 
     def toggle_proxy_widgets(self) -> None:
         """プロキシ関連のウィジェットを有効化または無効化する."""
@@ -857,6 +938,28 @@ class MainWindow(Tk):
 
         # 見つからない場合は空文字列を返す
         return ""
+
+    def save_settings(self) -> None:
+        """現在の設定を保存する."""
+        key = generate_key()
+        settings = {
+            "os_name": self.os_var.get(),
+            "python_versions": [
+                self.python_versions[i]
+                for i in self.python_version_listbox.curselection()
+            ],
+            "package_list_file": self.package_list_entry.get(),
+            "dest_folder": self.dest_folder_entry.get(),
+            "pip_path": self.pip_path_entry.get(),
+            "proxy_user": self.proxy_user_entry.get(),
+            "proxy_password": self.proxy_password_entry.get(),
+            "proxy_server": self.proxy_server_entry.get(),
+            "proxy_port": self.proxy_port_entry.get(),
+            "include_source": self.include_source_var.get(),
+            "use_proxy": self.use_proxy_var.get(),
+        }
+        save_settings(settings, key)
+        messagebox.showinfo("保存完了", "設定が保存されました。")
 
 
 if __name__ == "__main__":

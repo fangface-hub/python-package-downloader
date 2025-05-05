@@ -17,9 +17,10 @@ python-package-downloader
 ## インストール
 
 必要な依存関係をインストールするには、以下のコマンドを実行してください:
+pipを使用してダウンロードする場合はインストール不要です。
 
 ```
-pip install pypi-simple request
+pip install pypi-simple request cryptography
 ```
 
 ## 使用方法
