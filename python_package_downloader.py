@@ -9,9 +9,7 @@
 
 # 必要なライブラリをインポート
 import os
-import subprocess
 from tkinter import (
-    ttk,
     Tk,
     messagebox,
     filedialog,
@@ -21,12 +19,9 @@ from tkinter import (
     Listbox,
     END,
 )
-from tkinter.ttk import Entry, Combobox, Button, Radiobutton
-from dataclasses import dataclass
-import re
+from tkinter.ttk import Frame, Entry, Button, Radiobutton, Checkbutton
 import urllib.parse  # URLエンコード用
 import shutil
-import logging
 import json
 
 try:
@@ -36,522 +31,95 @@ try:
 except ImportError:
     CRYPTOGRAPHY_AVAILABLE = False
 
-try:
-    from pypi_simple import PyPISimple
-    import requests
+from loggingex import generate_logger, set_init_logfile
 
-    PYPISIMPLE_AVAILABLE = True
-except ImportError:
-    PYPISIMPLE_AVAILABLE = False
-
-# ログファイルのパス
-LOG_FILE = "python_package_downloader.log"
-
-# 起動時にログファイルをクリア
-if os.path.exists(LOG_FILE):
-    with open(LOG_FILE, "w", encoding="utf-8"):
-        pass  # ファイルを空にする
-
-# ログの設定
-logging.basicConfig(
-    level=logging.INFO,  # ログレベルをINFOに設定
-    format="%(asctime)s - %(levelname)s - %(message)s",  # ログのフォーマット
-    handlers=[
-        logging.FileHandler(LOG_FILE),  # ログをファイルに出力
-        logging.StreamHandler(),  # コンソールにも出力
-    ],
+from python_package_utility import (
+    OS_TO_PLATFORMS,
+    PYPISIMPLE_AVAILABLE,
+    PYTHON_VERSION_TO_ABI,
+    DownloadConfig,
+    start_download,
 )
-logger = logging.getLogger(__name__)
+
+set_init_logfile()
+logger = generate_logger(name=__name__, debug=__debug__, filepath=__file__)
 
 
-@dataclass
-class DownloadConfig:
-    """
-    パッケージダウンロードの設定を保持するデータクラス.
-
-    Attributes
-    ----------
-    os_name : str
-        対象のOS名.
-    python_version : str
-        対象のPythonバージョン.
-    package_list_file : str
-        パッケージリストファイルのパス.
-    dest_folder : str
-        ダウンロード先フォルダのパス.
-    include_source : bool, optional
-        ソース形式を含めるかどうか (デフォルトはFalse).
-    proxy : str, optional
-        プロキシ設定 (例: "http://user:password@proxyserver:port").
-    use_pip : bool, optional
-        pipを使用するかどうか (デフォルトはTrue).
-    pip_path : str, optional
-        pipのパス (use_pipがTrueの場合に使用).
-    """
-
-    os_name: str
-    python_version: str
-    package_list_file: str
-    dest_folder: str
-    include_source: bool = False
-    proxy: str = (
-        None  # プロキシ設定（例: "http://user:password@proxyserver:port"）
-    )
-    use_pip: bool = True  # pipを使用するかどうか
-    pip_path: str = ""  # pipのパス（use_pipがTrueの場合に使用）
-
-
-@dataclass
-class PackageInfo:
-    """
-    パッケージ情報を保持するデータクラス.
-
-    Attributes
-    ----------
-    name : str
-        パッケージ名.
-    version : str
-        バージョン.
-    python_version : str
-        Pythonバージョン.
-    abi : str
-        ABI.
-    platform : str
-        プラットフォーム.
-    """
-
-    name: str
-    version: str
-    python_version: str
-    abi: str
-    platform: str
-
-
-class LabeledEntry:
-    """
-    ラベル付きのエントリウィジェットを作成するクラス.
+class CustomEntry(Entry):
+    """カスタムエントリウィジェット.
+    StringVarを使用して、値の取得と設定を行う.
 
     Parameters
     ----------
-    parent : tk.Widget
-        親ウィジェット.
-    label_text : str
-        ラベルのテキスト.
-    row : int
-        配置する行番号.
-    column : int
-        配置する列番号.
-    entry_state : str, optional
-        エントリの状態（デフォルトは "normal"）.
-    show : str, optional
-        エントリの表示形式（例: "*"）。デフォルトは None.
-    padx : int, optional
-        x方向のパディング（デフォルトは10）.
-    pady : int, optional
-        y方向のパディング（デフォルトは5）.
+    Entry : _type_
+        tkinterのEntryウィジェットを継承.
     """
 
-    def __init__(
-        self,
-        parent,
-        label_text,
-        row,
-        column,
-        entry_state="normal",
-        show=None,
-        padx=10,
-        pady=5,
-    ):
-        """初期化メソッド."""
+    def __init__(self, master=None, **kwargs):
         self.var = StringVar()
-        self.label = Label(parent, text=label_text)
-        self.label.grid(
-            row=row, column=column, padx=padx, pady=pady, sticky="w"
-        )
+        super().__init__(master, textvariable=self.var, **kwargs)
 
-        self.entry = Entry(
-            parent, textvariable=self.var, state=entry_state, show=show
-        )
-        self.entry.grid(row=row, column=column + 1, padx=padx, pady=pady)
-
-    def get(self) -> str:
-        """エントリの値を取得する.
-
-        Returns
-        -------
-        str:
-            エントリの値.
-        """
+    @property
+    def value(self) -> str:
+        """値を取得（getter）."""
         return self.var.get()
 
-    def set(self, value: str) -> None:
-        """エントリの値を設定する.
-
-        Parameters
-        ----------
-        value : str
-            設定する値.
-        """
-        self.var.set(value)
-
-    def configure_state(self, state: str) -> None:
-        """エントリの状態を設定する.
-
-        Parameters
-        ----------
-        state : str
-            エントリの状態,（例: "normal", "readonly", "disabled"）.
-        """
-        self.entry.config(state=state)
-
-    def configure_show(self, show: str) -> None:
-        """エントリの表示形式を設定する.
-
-        Parameters
-        ----------
-        show : str
-            エントリの状態
-        """
-        self.entry.config(show=show)
+    @value.setter
+    def value(self, new_value) -> None:
+        """値を設定（setter）."""
+        self.var.set(new_value)
 
 
-def get_package_info_from_filename(filename: str) -> PackageInfo:
-    """ファイル名から情報を取得する.
+class CustomCheckbutton(Checkbutton):
+    """カスタムチェックボックスウィジェット.
+    BooleanVarを使用して、値の取得と設定を行う.
 
     Parameters
     ----------
-    filename : str
-        ファイル名.
-
-    Returns
-    -------
-    PackageInfo
-        パッケージ情報.
+    Checkbutton : _type_
+        tkinterのCheckbuttonウィジェットを継承.
     """
-    package_name = "unknown"
-    package_version = "unknown"
-    python_version = "unknown"
-    abi = "unknown"
-    platform = "unknown"
-    match = re.search(r"([^-]+)-([^-]+)-([^-]+)-([^-]+)-([^-]+)\.whl", filename)
-    if match:
-        package_name = match.group(1)
-        package_version = match.group(2)
-        python_version = match.group(3)
-        abi = match.group(4)
-        platform = match.group(5)
-    return PackageInfo(
-        name=package_name,
-        version=package_version,
-        python_version=python_version,
-        abi=abi,
-        platform=platform,
-    )
+
+    def __init__(self, master=None, **kwargs):
+        self.var = BooleanVar()
+        super().__init__(master, variable=self.var, **kwargs)
+
+    @property
+    def value(self) -> bool:
+        """値を取得（getter）."""
+        return self.var.get()
+
+    @value.setter
+    def value(self, new_value) -> None:
+        """値を設定（setter）."""
+        self.var.set(new_value)
 
 
-def download_package(
-    package_name: str, platform: str, abi: str, config: DownloadConfig
-) -> None:
-    """指定された条件でパッケージをダウンロードする.
+class CustomListbox(Listbox):
+    """カスタムリストボックスウィジェット.
+    StringVarを使用して、値の取得と設定を行う.
 
     Parameters
     ----------
-    package_name : str
-        ダウンロードするパッケージ名.
-    platform : str
-        対象のプラットフォーム.
-    abi : str
-        対象のABI.
-    config : DownloadConfig
-        ダウンロード設定.
+    Listbox : _type_
+        tkinterのListboxウィジェットを継承.
     """
-    base_command = [
-        config.pip_path,
-        "download",
-        package_name,
-        f"--platform={platform}",
-        f"--python-version={config.python_version}",
-        f"--abi={abi}",
-        f"--dest={config.dest_folder}",
-    ]
-    if config.proxy:
-        base_command.append(f"--proxy={config.proxy}")  # プロキシ設定を追加
-    only_binary_command = base_command.copy()
-    only_binary_command.append("--only-binary=:all:")
 
-    try:
-        subprocess.run(only_binary_command, check=True)
-        logger.info("%sが正常にダウンロードされました。", package_name)
-        return
-    except subprocess.CalledProcessError as e:
-        if config.include_source:
-            pass
-        else:
-            logger.error(
-                "%sのダウンロード中にエラーが発生しました: %s", package_name, e
-            )
-            return
-    # ソース形式を含める場合は、--no-binaryオプションを使用して再度ダウンロード
-    no_binary_command = base_command.copy()
-    no_binary_command.append("--no-binary=:all:")
-    try:
-        subprocess.run(no_binary_command, check=True)
-        logger.info("%sが正常にダウンロードされました。", package_name)
-        return
-    except subprocess.CalledProcessError:
-        pass
-    # 依存関係を無視して --no-depsオプションを使用して再度ダウンロード
-    no_deps_command = no_binary_command.copy()
-    no_deps_command.append("--no-deps")
-    try:
-        subprocess.run(no_deps_command, check=True)
-        logger.info("%sが正常にダウンロードされました。", package_name)
-        return
-    except subprocess.CalledProcessError as e:
-        logger.error(
-            "%sのダウンロード中にエラーが発生しました: %s", package_name, e
-        )
+    def __init__(self, master=None, **kwargs):
+        super().__init__(master, **kwargs)
 
+    @property
+    def curselection_list(self) -> list[str]:
+        """選択中のリスト."""
+        return [self.get(i) for i in self.curselection()]
 
-def download_package_no_pip(
-    package_name: str, platform: str, abi: str, config: DownloadConfig
-) -> None:
-    """PyPISimpleとrequestsを使用して1つのパッケージをダウンロードする.
-
-    Parameters
-    ----------
-    package_name : str
-        ダウンロードするパッケージ名.
-    platform : str
-        対象のプラットフォーム.
-    abi : str
-        対象のABI.
-    config : DownloadConfig
-        ダウンロード設定.
-    """
-    logger.info("%sのダウンロードを開始します...", package_name)
-
-    try:
-        pypi = PyPISimple()
-        packages_info = pypi.get_project_page(package_name)
-        if not packages_info:
-            logger.warning("%sの情報が見つかりませんでした。", package_name)
-            return
-
-        # プラットフォーム、Pythonバージョン、ABIでフィルタリング
-        abi = PYTHON_VERSION_TO_ABI.get(
-            config.python_version
-        )  # 辞書からABIを取得
-        if not abi:
-            logger.warning(
-                "%sのABIが見つかりませんでした。", config.python_version
-            )
-            return
-
-        dlcnt = 0
-        for package in reversed(packages_info.packages):
-            skip_flg = False
-            # プラットフォームでフィルタリング
-            package_info = get_package_info_from_filename(package.filename)
-            if "any" != package_info.platform:
-                if platform != package_info.platform:
-                    skip_flg = True
-            # ABIでフィルタリング
-            if "none" != package_info.abi:
-                if abi != package_info.abi:
-                    skip_flg = True
-            # Pythonバージョンでフィルタリング
-            if "none" != package_info.python_version:
-                if (
-                    config.python_version.replace(".", "")
-                    in package_info.python_version
-                ):
-                    skip_flg = True
-            if skip_flg:
-                continue
-            # パッケージをダウンロード
-            response = requests.get(package.url, stream=True, timeout=10)
-            response.raise_for_status()
-
-            # ファイルを保存
-            filename = os.path.join(
-                config.dest_folder, os.path.basename(package.url)
-            )
-            with open(filename, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            dlcnt += 1
-            logger.info("%sのダウンロードが完了しました。", package.filename)
-            break
-        if config.include_source and dlcnt == 0:
-            for package in reversed(packages_info.packages):
-                # ソース形式を含める場合は、再度ダウンロード
-                if package.filename.endswith(".tar.gz"):
-                    response = requests.get(
-                        package.url, stream=True, timeout=10
-                    )
-                    response.raise_for_status()
-                    # ファイルを保存
-                    filename = os.path.join(
-                        config.dest_folder, os.path.basename(package.url)
-                    )
-                    with open(filename, "wb") as f:
-                        for chunk in response.iter_content(chunk_size=8192):
-                            f.write(chunk)
-                    dlcnt += 1
-                    logger.info(
-                        "%sのダウンロードが完了しました。", package.filename
-                    )
-                    break
-        if dlcnt == 0:
-            logger.warning(
-                "%sのダウンロードURLが見つかりませんでした。", package_name
-            )
-    except requests.exceptions.RequestException as e:
-        logger.error(
-            "%sのダウンロード中にエラーが発生しました: %s", package_name, e
-        )
-
-
-def download_packages_from_list(
-    platform: str, abi: str, config: DownloadConfig
-) -> None:
-    """パッケージリストファイルからパッケージを読み込み、ダウンロードする.
-
-    Parameters
-    ----------
-    platform : str
-        対象のプラットフォーム.
-    abi : str
-        対象のABI.
-    config : DownloadConfig
-        ダウンロード設定.
-    """
-    if not os.path.exists(config.package_list_file):
-        messagebox.showerror(
-            "エラー",
-            f"指定されたファイルが見つかりません: {config.package_list_file}",
-        )
-        return
-
-    with open(config.package_list_file, "r", encoding="utf-8") as file:
-        packages = file.readlines()
-
-    for package_name in packages:
-        package_name = package_name.strip()
-        if package_name:
-            logger.info("%sのダウンロードを開始します...", package_name)
-            download_package(package_name, platform, abi, config)
-
-
-# PythonバージョンとABIの対応辞書
-PYTHON_VERSION_TO_ABI = {
-    "3.6": "cp36",
-    "3.7": "cp37",
-    "3.8": "cp38",
-    "3.9": "cp39",
-    "3.10": "cp310",
-    "3.11": "cp311",
-    "3.12": "cp312",
-    "3.13": "cp313",
-}
-
-OS_TO_PLATFORMS = {
-    "Windows": ["win_amd64"],
-    "Linux": ["manylinux2014_x86_64", "manylinux2010_x86_64"],
-    "Linux(manylinux2010_x86_64)": ["manylinux2010_x86_64"],
-    "macOS": ["macosx_10_9_x86_64"],
-}
-
-
-def start_download(config: DownloadConfig) -> None:
-    """指定されたOSとPythonバージョンでパッケージをダウンロードする.
-
-    Parameters
-    ----------
-    config : DownloadConfig
-        ダウンロード設定.
-    """
-    platforms = OS_TO_PLATFORMS.get(config.os_name)
-    if not platforms:
-        logger.error("サポートされていないOSです: %s", config.os_name)
-        messagebox.showerror(
-            "エラー", f"サポートされていないOSです: {config.os_name}"
-        )
-        return
-
-    # ABIを辞書から取得
-    abi = PYTHON_VERSION_TO_ABI.get(config.python_version)
-    if not abi:
-        logger.error(
-            "サポートされていないPythonバージョンです: %s",
-            config.python_version,
-        )
-        messagebox.showerror(
-            "エラー",
-            "".join(
-                [
-                    "サポートされていないPythonバージョンです:",
-                    f"{config.python_version}",
-                ]
-            ),
-        )
-        return
-
-    os.makedirs(config.dest_folder, exist_ok=True)
-
-    for platform in platforms:
-        logger.info("Platform: %s, ABI: %s", platform, abi)
-        download_packages_from_list(platform, abi, config)
-
-
-def start_download_no_pip(config: DownloadConfig) -> None:
-    """PyPISimpleとrequestsを使用してパッケージをダウンロードする.
-
-    Parameters
-    ----------
-    config : DownloadConfig
-        ダウンロード設定.
-    """
-    platforms = OS_TO_PLATFORMS.get(config.os_name)
-    if not platforms:
-        logger.error("サポートされていないOSです: %s", config.os_name)
-        messagebox.showerror(
-            "エラー", f"サポートされていないOSです: {config.os_name}"
-        )
-        return
-
-    # ABIを辞書から取得
-    abi = PYTHON_VERSION_TO_ABI.get(config.python_version)
-    if not abi:
-        logger.error(
-            "サポートされていないPythonバージョンです: %s",
-            config.python_version,
-        )
-        messagebox.showerror(
-            "エラー",
-            "".join(
-                [
-                    "サポートされていないPythonバージョンです:",
-                    f"{config.python_version}",
-                ]
-            ),
-        )
-        return
-
-    os.makedirs(config.dest_folder, exist_ok=True)
-
-    for platform in platforms:
-        with open(config.package_list_file, "r", encoding="utf-8") as file:
-            packages = file.readlines()
-
-        for package_name in packages:
-            package_name = package_name.strip()
-            if not package_name:
-                continue
-
-            # ダウンロード処理を関数に委譲
-            download_package_no_pip(package_name, platform, abi, config)
+    @curselection_list.setter
+    def curselection_list(self, new_value) -> None:
+        """選択中のリストを設定."""
+        self.selection_clear(0, END)
+        for item in new_value:
+            index = self.get(0, END).index(item)
+            self.selection_set(index)
 
 
 def generate_key() -> bytes:
@@ -579,20 +147,39 @@ def decrypt_password(encrypted_password: str, key: bytes) -> str:
     return fernet.decrypt(encrypted_password.encode()).decode()
 
 
-def save_settings(settings: dict, key: bytes) -> None:
+def save_settings(settings: dict) -> None:
     """設定をJSONファイルに保存する."""
-    if "proxy_password" in settings:
-        settings["proxy_password"] = encrypt_password(
-            settings["proxy_password"], key
-        )
+    settings_copy = settings.copy()
+    # 暗号化キーが有効な場合
+    if CRYPTOGRAPHY_AVAILABLE:
+        key = generate_key()
+    else:
+        key = None
+    if CRYPTOGRAPHY_AVAILABLE:
+        if settings_copy.get("proxy_password", "") != "":
+            settings_copy["proxy_password"] = encrypt_password(
+                settings_copy["proxy_password"], key
+            )
+        else:
+            # proxy_passwordが設定されていない場合は削除
+            del settings_copy["proxy_password"]
+    else:
+        # cryptographyがインストールされていない場合は、パスワードを削除する
+        del settings_copy["proxy_password"]
     with open("settings.json", "w", encoding="utf-8") as f:
-        json.dump(settings, f, ensure_ascii=False, indent=4)
+        json.dump(settings_copy, f, ensure_ascii=False, indent=4)
 
 
-def load_settings(key: bytes) -> dict:
+def load_settings() -> dict:
     """JSONファイルから設定を読み込む."""
     if not os.path.exists("settings.json"):
         return {}
+    # 暗号化キーが有効な場合
+    if CRYPTOGRAPHY_AVAILABLE:
+        key = generate_key()
+    else:
+        key = None
+
     with open("settings.json", "r", encoding="utf-8") as f:
         settings = json.load(f)
     if "proxy_password" in settings:
@@ -617,185 +204,260 @@ class MainWindow(Tk):
         self.title("pythonパッケージダウンローダー")
         self.setup_ui()
 
-        key = generate_key() if CRYPTOGRAPHY_AVAILABLE else None
-        settings = load_settings(key)
+        settings = load_settings()
         if settings:
-            self.os_var.set(settings.get("os_name", "Windows"))
-            for version in settings.get("python_versions", []):
-                if version in self.python_versions:
-                    index = self.python_versions.index(version)
-                    self.python_version_listbox.select_set(index)
-            self.package_list_entry.set(settings.get("package_list_file", ""))
-            self.dest_folder_entry.set(settings.get("dest_folder", ""))
-            self.pip_path_entry.set(settings.get("pip_path", ""))
-            self.proxy_user_entry.set(settings.get("proxy_user", ""))
-            self.proxy_password_entry.set(settings.get("proxy_password", ""))
-            self.proxy_server_entry.set(settings.get("proxy_server", ""))
-            self.proxy_port_entry.set(settings.get("proxy_port", ""))
-            self.include_source_var.set(settings.get("include_source", False))
-            self.use_proxy_var.set(settings.get("use_proxy", False))
+            self.os_options_listbox.curselection_list = settings.get(
+                "os_list", []
+            )
+            self.python_version_listbox.curselection_list = settings.get(
+                "python_versions", []
+            )
+            self.package_list_entry.value = settings.get(
+                "package_list_file", ""
+            )
+            self.dest_folder_entry.value = settings.get("dest_folder", "")
+            self.pip_path_entry.value = settings.get("pip_path", "")
+            self.proxy_user_entry.value = settings.get("proxy_user", "")
+            self.proxy_password_entry.value = settings.get("proxy_password", "")
+            self.proxy_server_entry.value = settings.get("proxy_server", "")
+            self.proxy_port_entry.value = settings.get("proxy_port", "")
+            self.include_source_check.value = settings.get(
+                "include_source", False
+            )
+            self.include_deps_check.value = settings.get("incude_deps", False)
+            self.use_proxy_checkbox.value = settings.get("use_proxy", False)
             self.toggle_proxy_widgets()
 
     def setup_ui(self) -> None:
         """GUIの各要素を設定する."""
         # pip使用選択
-        pip_use_lbl = Label(self, text="ダウンロード方法:")
-        pip_use_lbl.grid(row=0, column=0, padx=10, pady=5, sticky="w")
+        pip_use_frame = Frame(self)
+        pip_use_frame.pack(side="top", fill="x", padx=2, pady=2)
+        pip_use_lbl = Label(pip_use_frame, text="ダウンロード方法:")
+        pip_use_lbl.pack(side="left", padx=10, pady=5)
         self.download_method_var = StringVar(value="pip")
         pip_radio = Radiobutton(
-            self,
+            pip_use_frame,
             text="pipを使う",
             variable=self.download_method_var,
             value="pip",
         )
-        pip_radio.grid(row=0, column=1, padx=10, pady=5, sticky="w")
+        pip_radio.pack(side="left", padx=10, pady=5)
         no_pip_radio = Radiobutton(
-            self,
+            pip_use_frame,
             text="pipを使わない",
             variable=self.download_method_var,
             value="no_pip",
         )
-        no_pip_radio.grid(row=0, column=2, padx=10, pady=5, sticky="w")
-
+        no_pip_radio.pack(side="left", padx=10, pady=5)
         # OS選択
-        Label(self, text="OSを選択:").grid(
-            row=1, column=0, padx=10, pady=5, sticky="w"
+        os_frame = Frame(self)
+        os_frame.pack(side="top", fill="x", padx=2, pady=2)
+        Label(os_frame, text="OSを選択:").pack(
+            side="left", padx=10, pady=5, anchor="w"
         )
-        self.os_var = StringVar(value="Windows")
-        os_options = [
-            "Windows",
-            "Linux",
-            "Linux(manylinux2010_x86_64)",
-            "macOS",
-        ]
-        os_menu = Combobox(
-            self, textvariable=self.os_var, values=os_options, state="readonly"
+        self.os_options = list(OS_TO_PLATFORMS.keys())
+        self.os_options_listbox = CustomListbox(
+            os_frame,
+            selectmode="multiple",
+            exportselection=False,
+            height=len(self.os_options),
         )
-        os_menu.grid(row=1, column=1, padx=10, pady=5)
-
+        self.os_options_listbox.pack(
+            side="left", padx=10, pady=5, fill="both", expand=True
+        )
+        for os_option in self.os_options:
+            self.os_options_listbox.insert(END, os_option)
         # Pythonバージョン選択（複数選択可能）
-        Label(self, text="Pythonバージョン（複数選択可）:").grid(
-            row=2, column=0, padx=10, pady=5, sticky="w"
-        )
-        self.python_versions = [
-            "3.6",
-            "3.7",
-            "3.8",
-            "3.9",
-            "3.10",
-            "3.11",
-            "3.12",
-            "3.13",
-        ]
-        self.python_version_listbox = Listbox(
-            self, selectmode="multiple", height=len(self.python_versions)
+        python_version_frame = Frame(self)
+        python_version_frame.pack(side="top", fill="x", padx=2, pady=2)
+        Label(
+            python_version_frame, text="Pythonバージョン（複数選択可）:"
+        ).pack(side="left", padx=10, pady=5, anchor="w")
+        self.python_versions = list(PYTHON_VERSION_TO_ABI.keys())
+        self.python_version_listbox = CustomListbox(
+            python_version_frame,
+            selectmode="multiple",
+            exportselection=False,
+            height=len(self.python_versions),
         )
         for version in self.python_versions:
             self.python_version_listbox.insert(END, version)
-        self.python_version_listbox.grid(row=2, column=1, padx=10, pady=5)
+        self.python_version_listbox.pack(
+            side="left", padx=10, pady=5, fill="both", expand=True
+        )
 
         # パッケージリストファイル選択
-        self.package_list_entry = LabeledEntry(
-            self,
-            "パッケージリスト:",
-            row=3,
-            column=0,
-            entry_state="readonly",
+        package_list_frame = Frame(self)
+        package_list_frame.pack(side="top", fill="x", padx=2, pady=2)
+        Label(package_list_frame, text="パッケージリスト:").pack(
+            side="left", padx=10, pady=5, anchor="w"
+        )
+        self.package_list_entry = CustomEntry(
+            package_list_frame,
+            state="readonly",
+        )
+        self.package_list_entry.pack(
+            side="left", padx=10, pady=5, fill="both", expand=True
         )
         # 初期値をスクリプトの格納ディレクトリの package_list.txt に設定
         script_dir = os.path.dirname(os.path.abspath(__file__))
         default_package_list_path = os.path.join(script_dir, "package_list.txt")
-        self.package_list_entry.set(default_package_list_path)
+        self.package_list_entry.value = default_package_list_path
         package_list_button = Button(
-            self, text="選択", command=self.select_package_list
+            package_list_frame, text="選択", command=self.select_package_list
         )
-        package_list_button.grid(row=3, column=2, padx=10, pady=5)
-
+        package_list_button.pack(
+            side="left", padx=10, pady=5, fill="x", expand=False
+        )
         # ダウンロード先フォルダ選択
-        self.dest_folder_entry = LabeledEntry(
-            self, "ダウンロード先:", row=4, column=0, entry_state="readonly"
+        dest_folder_frame = Frame(self)
+        dest_folder_frame.pack(side="top", fill="x", padx=2, pady=2)
+        Label(dest_folder_frame, text="ダウンロード先フォルダ:").pack(
+            side="left", padx=10, pady=5, anchor="w"
+        )
+        self.dest_folder_entry = CustomEntry(
+            dest_folder_frame,
+            state="readonly",
+        )
+        self.dest_folder_entry.pack(
+            side="left", padx=10, pady=5, fill="both", expand=True
         )
         # 初期値をスクリプトの格納ディレクトリの downloads に設定
         script_dir = os.path.dirname(os.path.abspath(__file__))
         default_dest_folder = os.path.join(script_dir, "downloads")
-        self.dest_folder_entry.set(default_dest_folder)
+        self.dest_folder_entry.value = default_dest_folder
         dest_folder_button = Button(
-            self, text="選択", command=self.select_dest_folder
+            dest_folder_frame, text="選択", command=self.select_dest_folder
         )
-        dest_folder_button.grid(row=4, column=2, padx=10, pady=5)
+        dest_folder_button.pack(
+            side="left", padx=10, pady=5, fill="x", expand=False
+        )
 
         # pipパス指定
-        self.pip_path_entry = LabeledEntry(self, "pipのパス:", row=5, column=0)
-        self.pip_path_entry.set(self.get_default_pip_path())
-        pip_path_button = Button(
-            self, text="選択", command=self.select_pip_path
+        pip_path_frame = Frame(self)
+        pip_path_frame.pack(side="top", fill="x", padx=2, pady=2)
+        Label(pip_path_frame, text="pipのパス:").pack(
+            side="left", padx=10, pady=5, anchor="w"
         )
-        pip_path_button.grid(row=5, column=2, padx=10, pady=5)
+        self.pip_path_entry = CustomEntry(pip_path_frame)
+        self.pip_path_entry.pack(
+            side="left", padx=10, pady=5, fill="both", expand=True
+        )
+        self.pip_path_entry.value = self.get_default_pip_path()
+        pip_path_button = Button(
+            pip_path_frame, text="選択", command=self.select_pip_path
+        )
+        pip_path_button.pack(
+            side="left", padx=10, pady=5, fill="x", expand=False
+        )
 
         # プロキシ設定
-        self.use_proxy_var = BooleanVar(value=False)
-        use_proxy_check = ttk.Checkbutton(
-            self,
+        proxy_setting_frame = Frame(self)
+        proxy_setting_frame.pack(side="top", fill="x", padx=2, pady=2)
+        use_proxy_frame = Frame(proxy_setting_frame)
+        use_proxy_frame.pack(side="top", fill="x", padx=2, pady=0)
+        self.use_proxy_checkbox = CustomCheckbutton(
+            use_proxy_frame,
             text="プロキシを使用する",
-            variable=self.use_proxy_var,
             command=self.toggle_proxy_widgets,
         )
-        use_proxy_check.grid(
-            row=6, column=0, columnspan=2, padx=10, pady=5, sticky="w"
+        self.use_proxy_checkbox.pack(side="left", padx=10, pady=2, anchor="w")
+        self.use_proxy_checkbox.value = False
+        proxy_user_frame = Frame(proxy_setting_frame)
+        proxy_user_frame.pack(side="top", fill="x", padx=2, pady=0)
+        Label(proxy_user_frame, text="プロキシユーザー名:").pack(
+            side="left", padx=10, pady=2, anchor="w"
         )
-
-        self.proxy_user_entry = LabeledEntry(
-            self, "ユーザー:", row=7, column=0, entry_state="disabled"
+        self.proxy_user_entry = CustomEntry(
+            proxy_user_frame,
+            state="disabled",
         )
-
-        self.proxy_password_entry = LabeledEntry(
-            self,
-            "パスワード:",
-            row=8,
-            column=0,
-            entry_state="disabled",
+        self.proxy_user_entry.pack(
+            side="left", padx=10, pady=2, fill="both", expand=True
+        )
+        proxy_password_frame = Frame(proxy_setting_frame)
+        proxy_password_frame.pack(side="top", fill="x", padx=2, pady=0)
+        Label(proxy_password_frame, text="プロキシパスワード:").pack(
+            side="left", padx=10, pady=2, anchor="w"
+        )
+        self.proxy_password_entry = CustomEntry(
+            proxy_password_frame,
+            state="disabled",
             show="*",
         )
-
-        self.proxy_server_entry = LabeledEntry(
-            self, "サーバ:", row=9, column=0, entry_state="disabled"
+        self.proxy_password_entry.pack(
+            side="left", padx=10, pady=2, fill="both", expand=True
         )
-
-        self.proxy_port_entry = LabeledEntry(
-            self, "ポート:", row=10, column=0, entry_state="disabled"
+        proxy_server_frame = Frame(proxy_setting_frame)
+        proxy_server_frame.pack(side="top", fill="x", padx=2, pady=0)
+        Label(proxy_server_frame, text="プロキシサーバー:").pack(
+            side="left", padx=10, pady=2, anchor="w"
         )
-        validatecommand = (self.register(self.validate_port), "%P")
-        self.proxy_port_entry.entry["validatecommand"] = validatecommand
+        self.proxy_server_entry = CustomEntry(
+            proxy_server_frame,
+            state="disabled",
+        )
+        self.proxy_server_entry.pack(
+            side="left", padx=10, pady=2, fill="both", expand=True
+        )
+        proxy_port_frame = Frame(proxy_setting_frame)
+        proxy_port_frame.pack(side="top", fill="x", padx=2, pady=0)
+        Label(proxy_port_frame, text="プロキシポート:").pack(
+            side="left", padx=10, pady=2, anchor="w"
+        )
+        self.proxy_port_entry = CustomEntry(
+            proxy_port_frame, state="disabled", validate="key"
+        )
+        self.proxy_port_entry.pack(
+            side="left", padx=10, pady=2, fill="both", expand=True
+        )
+        validatecommand = (
+            proxy_port_frame.register(self.validate_port),
+            "%P",
+        )
+        self.proxy_port_entry.configure(validatecommand=validatecommand)
 
         # ソース形式を含めるチェックボックス
-        Label(self, text="ソース形式を含める:").grid(
-            row=11, column=0, padx=10, pady=5, sticky="w"
+        source_format_frame = Frame(self)
+        source_format_frame.pack(side="top", fill="x", padx=2, pady=2)
+        Label(source_format_frame, text="ソース形式を含める:").pack(
+            side="left", padx=10, pady=5, anchor="w"
         )
-        self.include_source_var = BooleanVar(value=False)
-        include_source_check = ttk.Checkbutton(
-            self, variable=self.include_source_var
+        self.include_source_check = CustomCheckbutton(source_format_frame)
+        self.include_source_check.pack(side="left", padx=10, pady=5, anchor="w")
+        self.include_source_check.value = False
+        include_deps_frame = Frame(self)
+        include_deps_frame.pack(side="top", fill="x", padx=2, pady=2)
+        Label(include_deps_frame, text="依存パッケージをダウンロードする").pack(
+            side="left", padx=10, pady=5, anchor="w"
         )
-        include_source_check.grid(row=11, column=1, padx=10, pady=5)
-
+        self.include_deps_check = CustomCheckbutton(include_deps_frame)
+        self.include_deps_check.pack(side="left", padx=10, pady=5, anchor="w")
+        self.include_deps_check.value = False
         # ダウンロード開始ボタン
+        button_frame = Frame(self)
+        button_frame.pack(side="top", fill="x", padx=2, pady=2)
         download_button = Button(
-            self, text="ダウンロード開始", command=self.on_download
+            button_frame, text="ダウンロード開始", command=self.on_download
         )
-        download_button.grid(row=12, column=0, columnspan=3, pady=10)
+        download_button.pack(
+            side="left", padx=10, pady=5, fill="x", expand=True
+        )
 
         # 設定を保存ボタン
         save_button = Button(
-            self, text="設定を保存", command=self.save_settings
+            button_frame, text="設定を保存", command=self.on_save_settings
         )
-        save_button.grid(row=13, column=0, columnspan=3, pady=10)
+        save_button.pack(side="left", padx=10, pady=5, fill="x", expand=True)
 
     def toggle_proxy_widgets(self) -> None:
         """プロキシ関連のウィジェットを有効化または無効化する."""
-        state = "normal" if self.use_proxy_var.get() else "disabled"
-        self.proxy_user_entry.configure_state(state)
-        self.proxy_password_entry.configure_state(state)
-        self.proxy_server_entry.configure_state(state)
-        self.proxy_port_entry.configure_state(state)
+        state = "normal" if self.use_proxy_checkbox.value else "disabled"
+        self.proxy_user_entry.config(state=state)
+        self.proxy_password_entry.config(state=state)
+        self.proxy_server_entry.config(state=state)
+        self.proxy_port_entry.config(state=state)
 
     def validate_port(self, value: str) -> bool:
         """ポート番号が数字のみで構成されているかを検証する.
@@ -823,7 +485,7 @@ class MainWindow(Tk):
             ],
         )
         if file_path:
-            self.package_list_entry.set(file_path)
+            self.package_list_entry.value = file_path
 
     def select_dest_folder(self) -> None:
         """ダウンロード先フォルダを選択する."""
@@ -832,7 +494,7 @@ class MainWindow(Tk):
             initialdir=self.dest_folder_entry.get(),
         )
         if folder_path:
-            self.dest_folder_entry.set(folder_path)
+            self.dest_folder_entry.value = folder_path
 
     def select_pip_path(self) -> None:
         """pipのパスを選択する."""
@@ -842,25 +504,23 @@ class MainWindow(Tk):
             filetypes=[("実行ファイル", "*.exe"), ("すべてのファイル", "*.*")],
         )
         if file_path:
-            self.pip_path_entry.set(file_path)
+            self.pip_path_entry.value = file_path
 
     def on_download(self) -> None:
         """ダウンロード処理を開始する."""
         download_method = self.download_method_var.get()
         use_pip = download_method == "pip" or not PYPISIMPLE_AVAILABLE
         pip_path = self.pip_path_entry.get() if use_pip else ""
-        os_name = self.os_var.get()
-        selected_versions = [
-            self.python_versions[i]
-            for i in self.python_version_listbox.curselection()
-        ]
+        os_list = self.os_options_listbox.curselection_list
+        python_versions = self.python_version_listbox.curselection_list
         package_list_file = self.package_list_entry.get()
         dest_folder = self.dest_folder_entry.get()
-        include_source = self.include_source_var.get()
+        include_source = self.include_source_check.value
+        include_deps = self.include_deps_check.value
 
         # プロキシ情報を組み立て
         proxy = None
-        if self.use_proxy_var.get():
+        if self.use_proxy_checkbox.value:
             proxy_user = self.proxy_user_var.get()
             proxy_password = self.proxy_password_var.get()
             proxy_server = self.proxy_server_var.get()
@@ -879,16 +539,22 @@ class MainWindow(Tk):
             os.environ["HTTP_PROXY"] = proxy
             os.environ["HTTPS_PROXY"] = proxy
 
-        if not selected_versions:
+        if len(os_list) < 1:
+            messagebox.showerror("エラー", "OSを1つ以上選択してください。")
+            return
+
+        if len(python_versions) < 1:
             messagebox.showerror(
                 "エラー", "Pythonバージョンを1つ以上選択してください。"
             )
             return
+
         if not package_list_file:
             messagebox.showerror(
                 "エラー", "パッケージリストファイルを選択してください。"
             )
             return
+
         if not dest_folder:
             messagebox.showerror(
                 "エラー", "ダウンロード先フォルダを選択してください。"
@@ -896,22 +562,19 @@ class MainWindow(Tk):
             return
 
         # 各バージョンに対してダウンロードを実行
-        for python_version in selected_versions:
-            config = DownloadConfig(
-                os_name=os_name,
-                python_version=python_version,
-                package_list_file=package_list_file,
-                dest_folder=dest_folder,
-                include_source=include_source,
-                proxy=proxy,
-                use_pip=use_pip,
-                pip_path=pip_path,
-            )
+        config = DownloadConfig(
+            os_list=os_list,
+            python_versions=python_versions,
+            package_list_file=package_list_file,
+            dest_folder=dest_folder,
+            include_source=include_source,
+            include_deps=include_deps,
+            proxy=proxy,
+            use_pip=use_pip,
+            pip_path=pip_path,
+        )
 
-            if config.use_pip:
-                start_download(config)
-            else:
-                start_download_no_pip(config)
+        start_download(config)
 
         # すべてのダウンロードが完了した後にダイアログを表示
         messagebox.showinfo(
@@ -939,26 +602,23 @@ class MainWindow(Tk):
         # 見つからない場合は空文字列を返す
         return ""
 
-    def save_settings(self) -> None:
+    def on_save_settings(self) -> None:
         """現在の設定を保存する."""
-        key = generate_key()
         settings = {
-            "os_name": self.os_var.get(),
-            "python_versions": [
-                self.python_versions[i]
-                for i in self.python_version_listbox.curselection()
-            ],
-            "package_list_file": self.package_list_entry.get(),
-            "dest_folder": self.dest_folder_entry.get(),
-            "pip_path": self.pip_path_entry.get(),
-            "proxy_user": self.proxy_user_entry.get(),
-            "proxy_password": self.proxy_password_entry.get(),
-            "proxy_server": self.proxy_server_entry.get(),
-            "proxy_port": self.proxy_port_entry.get(),
-            "include_source": self.include_source_var.get(),
-            "use_proxy": self.use_proxy_var.get(),
+            "os_list": self.os_options_listbox.curselection_list,
+            "python_versions": self.python_version_listbox.curselection_list,
+            "package_list_file": self.package_list_entry.value,
+            "dest_folder": self.dest_folder_entry.value,
+            "pip_path": self.pip_path_entry.value,
+            "proxy_user": self.proxy_user_entry.value,
+            "proxy_password": self.proxy_password_entry.value,
+            "proxy_server": self.proxy_server_entry.value,
+            "proxy_port": self.proxy_port_entry.value,
+            "include_source": self.include_source_check.value,
+            "include_deps": self.include_deps_check.value,
+            "use_proxy": self.use_proxy_checkbox.value,
         }
-        save_settings(settings, key)
+        save_settings(settings)
         messagebox.showinfo("保存完了", "設定が保存されました。")
 
 
