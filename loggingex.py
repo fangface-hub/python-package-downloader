@@ -17,7 +17,6 @@ from logging import (
     WARNING,
     CRITICAL,
 )
-from signalex import terminate_subprocess_at_signal
 
 DEFAULT_CONFIG_PATH = "loggingex_config.json"
 
@@ -258,22 +257,3 @@ def load_logging_config(config_path: str) -> dict:
         return {}
     with open(config_path, "r", encoding="utf-8") as f:
         return json.load(f)
-
-
-def main():
-    """
-    メイン処理.
-
-    Returns
-    -------
-    None.
-
-    """
-    _logger = generate_logger(__name__, __debug__, __file__)
-    _logger.debug("Start")
-    _logger.debug("End")
-
-
-if __name__ == "__main__":
-    terminate_subprocess_at_signal()
-    main()
