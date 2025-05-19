@@ -2,15 +2,13 @@
 
 # -*- coding: utf-8 -*-
 import os
-import sys
 import subprocess
 import tarfile
 import zipfile
 import re
 import logging
-import select
-import threading
 from dataclasses import dataclass, field
+from signalex import run_command
 
 try:
     from pypi_simple import PyPISimple
@@ -116,63 +114,6 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
-
-
-def stream_output(pipe, log_func):
-    """リアルタイムで出力をログに記録"""
-    for line in iter(pipe.readline, ""):
-        log_func(line.strip())
-
-
-def run_command(command: list[str]) -> None:
-    """コマンドの実行結果をパイプでログ出力する.
-
-    Parameters
-    ----------
-    command : _type_
-        コマンド
-    """
-    process = subprocess.Popen(
-        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-    )
-
-    if sys.platform == "win32":
-        # Windowsでは `threading` を使用
-        stdout_thread = threading.Thread(
-            target=stream_output, args=(process.stdout, logger.info)
-        )
-        stderr_thread = threading.Thread(
-            target=stream_output, args=(process.stderr, logger.error)
-        )
-
-        stdout_thread.start()
-        stderr_thread.start()
-        try:
-            process.wait(timeout=10.0)
-        except TimeoutError:
-            logger.error("Timeout command=%s", command)
-        stdout_thread.join()
-        stderr_thread.join()
-    else:
-        # Unix系では `select` を使用
-        while True:
-            reads = [process.stdout, process.stderr]
-            readable, _, _ = select.select(reads, [], [], 0.1)
-
-            for stream in readable:
-                line = stream.readline().strip()
-                if line:
-                    if stream == process.stdout:
-                        logger.info(line)
-                    else:
-                        logger.error(line)
-
-            if process.poll() is not None:
-                break
-        try:
-            process.wait(timeout=10.0)
-        except TimeoutError:
-            logger.error("Timeout command=%s", command)
 
 
 def get_dependencies_from_whl(whl_file: str) -> list[str]:
