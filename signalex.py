@@ -77,7 +77,7 @@ def run_command(command: list[str]) -> None:
         try:
             process.wait(timeout=10.0)
             subprocess_instances.remove(process)  # サブプロセスをリストから削除
-        except TimeoutError:
+        except (TimeoutError, subprocess.TimeoutExpired):
             logger.error("Timeout command=%s", command)
             subprocess_instances.remove(process)  # サブプロセスをリストから削除
         stdout_thread.join()

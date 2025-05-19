@@ -306,10 +306,11 @@ def download_package_no_pip(package_name: str, config: DownloadConfig) -> None:
         ダウンロード設定.
     """
     logger.info("%sのダウンロードを開始します...", package_name)
+    project_name = re.sub(r"([^~<>= ]*).*", r"\1", package_name)
     before_files = set(os.listdir(config.dest_folder))
     try:
         pypi = PyPISimple()
-        packages_info = pypi.get_project_page(package_name)
+        packages_info = pypi.get_project_page(project_name)
         if not packages_info:
             logger.warning("%sの情報が見つかりませんでした。", package_name)
             return
