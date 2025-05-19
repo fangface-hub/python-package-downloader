@@ -306,11 +306,10 @@ def download_package_no_pip(package_name: str, config: DownloadConfig) -> None:
         ダウンロード設定.
     """
     logger.info("%sのダウンロードを開始します...", package_name)
-    project_name = re.sub(r"([^~<>= ]*).*", r"\1", package_name)
     before_files = set(os.listdir(config.dest_folder))
     try:
         pypi = PyPISimple()
-        packages_info = pypi.get_project_page(project_name)
+        packages_info = pypi.get_project_page(package_name)
         if not packages_info:
             logger.warning("%sの情報が見つかりませんでした。", package_name)
             return
@@ -417,6 +416,31 @@ def check_hit_package_info(
     return True
 
 
+def download_packages(config: DownloadConfig, packages: list[str]) -> None:
+    """_summary_
+
+    Parameters
+    ----------
+    config : DownloadConfig
+        _description_
+    packages : list[str]
+        _description_
+    """
+    global dependencies_history  # pylint: disable=global-variable-not-assigned
+    for package_name in packages:
+        package_name = package_name.strip()
+        if not package_name:
+            continue
+        if package_name in dependencies_history:
+            continue
+        dependencies_history.append(package_name)
+        logger.info("%sのダウンロードを開始します...", package_name)
+        if config.use_pip:
+            download_package_pip(package_name, config)
+        else:
+            download_package_no_pip(package_name, config)
+
+
 def download_dep_package(config: DownloadConfig, filelist: list[str]):
     """依存ファイルをダウンロードする.
 
@@ -438,18 +462,7 @@ def download_dep_package(config: DownloadConfig, filelist: list[str]):
             dependencies = get_dependencies_from_whl(whl_file=file_path)
             packages.extend(dependencies)
             continue
-    for package_name in packages:
-        package_name = package_name.strip()
-        if not package_name:
-            continue
-        if package_name in dependencies_history:
-            continue
-        dependencies_history.append(package_name)
-        logger.info("%sのダウンロードを開始します...", package_name)
-        if config.use_pip:
-            download_package_pip(package_name, config)
-        else:
-            download_package_no_pip(package_name, config)
+    download_packages(config=config, packages=packages)
 
 
 def start_download(config: DownloadConfig) -> None:
@@ -466,13 +479,4 @@ def start_download(config: DownloadConfig) -> None:
 
     with open(config.package_list_file, "r", encoding="utf-8") as file:
         packages = file.readlines()
-
-    for package_name in packages:
-        package_name = package_name.strip()
-        if not package_name:
-            continue
-        logger.info("%sのダウンロードを開始します...", package_name)
-        if config.use_pip:
-            download_package_pip(package_name, config)
-        else:
-            download_package_no_pip(package_name, config)
+    download_packages(config=config, packages=packages)
