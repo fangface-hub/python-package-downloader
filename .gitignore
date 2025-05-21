@@ -37,6 +37,9 @@ MANIFEST
 *.manifest
 *.spec
 
+# Nuitka
+binary
+
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
