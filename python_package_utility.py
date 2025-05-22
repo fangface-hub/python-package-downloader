@@ -21,7 +21,7 @@ from loggingex import generate_logger
 
 logger = generate_logger(name=__name__, debug=__debug__, filepath=__file__)
 
-dependencies_history = []
+package_name_history = []
 # PythonバージョンとABIの対応辞書
 PYTHON_VERSION_TO_ABI = {
     "3.6": "cp36",
@@ -145,7 +145,7 @@ def get_dependencies_from_whl(whl_file: str) -> list[str]:
                 if extra_match:
                     continue
                 dep_package = re.sub(r"(Requires-Dist:)([^;]*).*$", r"\2", line)
-                dependencies.append(dep_package)
+                dependencies.append("".join(dep_package.split()))
     logger.debug("whl_file=%s,dependencies=%s", whl_file, dependencies)
     return dependencies
 
@@ -179,7 +179,7 @@ def get_dependencies_from_targz(targz_file: str) -> list[str]:
             if extra_match:
                 continue
             dep_package = re.sub(r"(Requires-Dist:)([^;]*).*$", r"\2", line)
-            dependencies.append(dep_package)
+            dependencies.append("".join(dep_package.split()))
     logger.debug("targz_file=%s,dependencies=%s", targz_file, dependencies)
     return dependencies
 
@@ -253,10 +253,11 @@ def download_package_pip(package_name: str, config: DownloadConfig) -> None:
                     run_command(only_binary_command)
         after_files = set(os.listdir(config.dest_folder))
         new_files = after_files - before_files
-        logger.info("%sが正常にダウンロードされました。", new_files)
-        if config.include_deps:
-            download_dep_package(config=config, filelist=new_files)
-        return
+        if 0 < len(new_files):
+            logger.info("%sが正常にダウンロードされました。", new_files)
+            if config.include_deps:
+                download_dep_package(config=config, filelist=new_files)
+            return
     except subprocess.CalledProcessError as e:
         if config.include_source:
             pass
@@ -265,34 +266,28 @@ def download_package_pip(package_name: str, config: DownloadConfig) -> None:
                 "%sのダウンロード中にエラーが発生しました: %s", package_name, e
             )
             return
+    if not config.include_source:
+        return
     # ソース形式を含める場合は、--no-binaryオプションを使用して再度ダウンロード
-    for os_name in config.os_list:
-        for platform in OS_TO_PLATFORMS.get(os_name):
-            for python_version in config.python_versions:
-                tmp_version = python_version.replace(".", "")
-                abi = PYTHON_VERSION_TO_ABI.get(python_version)
-                no_binary_command = base_command.copy()
-                no_binary_command.append("--no-binary=:all:")
-                no_binary_command.append(f"--platform={platform}")
-                no_binary_command.append(f"--python-version={tmp_version}")
-                no_binary_command.append(f"--abi={abi}")
-                no_binary_command.append(f"--dest={config.dest_folder}")
-                try:
-                    run_command(no_binary_command)
-                    continue
-                except subprocess.CalledProcessError:
-                    pass
-                no_deps_command = no_binary_command.copy()
-                no_deps_command.append("--no-deps")
-                try:
-                    run_command(no_deps_command)
-                except subprocess.CalledProcessError:
-                    pass
+    no_binary_command = base_command.copy()
+    no_binary_command.append("--no-binary=:all:")
+    no_binary_command.append(f"--dest={config.dest_folder}")
+    try:
+        run_command(no_binary_command)
+    except subprocess.CalledProcessError:
+        pass
+    no_deps_command = no_binary_command.copy()
+    no_deps_command.append("--no-deps")
+    try:
+        run_command(no_deps_command)
+    except subprocess.CalledProcessError:
+        pass
     after_files = set(os.listdir(config.dest_folder))
     new_files = after_files - before_files
-    logger.info("%sが正常にダウンロードされました。", new_files)
-    if config.include_deps:
-        download_dep_package(config=config, filelist=new_files)
+    if 0 < len(new_files):
+        logger.info("%sが正常にダウンロードされました。", new_files)
+        if config.include_deps:
+            download_dep_package(config=config, filelist=new_files)
 
 
 def download_package_no_pip(package_name: str, config: DownloadConfig) -> None:
@@ -426,14 +421,10 @@ def download_packages(config: DownloadConfig, packages: list[str]) -> None:
     packages : list[str]
         _description_
     """
-    global dependencies_history  # pylint: disable=global-variable-not-assigned
     for package_name in packages:
-        package_name = package_name.strip()
-        if not package_name:
+        if package_name in package_name_history:
             continue
-        if package_name in dependencies_history:
-            continue
-        dependencies_history.append(package_name)
+        package_name_history.append(package_name)
         logger.info("%sのダウンロードを開始します...", package_name)
         if config.use_pip:
             download_package_pip(package_name, config)
@@ -473,10 +464,10 @@ def start_download(config: DownloadConfig) -> None:
     config : DownloadConfig
         ダウンロード設定.
     """
-    global dependencies_history  # pylint: disable=global-statement
-    dependencies_history = []
+    package_name_history.clear()
     os.makedirs(config.dest_folder, exist_ok=True)
 
     with open(config.package_list_file, "r", encoding="utf-8") as file:
-        packages = file.readlines()
+        for line_ in file.readlines():
+            packages = "".join(line_.split())
     download_packages(config=config, packages=packages)

@@ -57,6 +57,7 @@ def run_command(command: list[str]) -> None:
     command : _type_
         コマンド
     """
+    logger.info("コマンドを実行します: %s", command)
     global subprocess_instances  # pylint: disable=global-variable-not-assigned
     process = subprocess.Popen(
         command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
