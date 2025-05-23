@@ -466,8 +466,8 @@ def start_download(config: DownloadConfig) -> None:
     """
     package_name_history.clear()
     os.makedirs(config.dest_folder, exist_ok=True)
-
+    packages = []
     with open(config.package_list_file, "r", encoding="utf-8") as file:
         for line_ in file.readlines():
-            packages = "".join(line_.split())
+            packages.append("".join(line_.split()))
     download_packages(config=config, packages=packages)
