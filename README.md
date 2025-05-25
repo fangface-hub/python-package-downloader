@@ -5,7 +5,7 @@
 ## プロジェクト構成
 
 ```
-python-package-downloader
+python_package_downloader
 ├── python_package_downloader.py  # パッケージダウンローダーのメインスクリプト
 ├── requirements.txt              # 依存関係のあるPythonパッケージのリスト
 ├── .gitignore                    # Gitで無視するファイルやディレクトリ
@@ -73,7 +73,7 @@ set yourname=yourname
 set orgname=orgname
 
 :: 出力ディレクトリ 適当にかえてください
-set outdir="C:\Users\youername\Documents\python-package-downloader"
+set outdir="C:\Users\youername\Documents\python_package_downloader"
 
 :: アプリケーションパス
 set aplicationpath="%outdir%\python_package_downloader.exe"
